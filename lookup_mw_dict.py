@@ -29,6 +29,76 @@ arg_parser.add_argument(
 args = arg_parser.parse_args()
 
 
+def process_formatting_tokens(text):
+    """
+    Process Merriam-Webster formatting and punctuation tokens.
+
+    Based on section 2.29.1 of the MW API documentation, these tokens
+    mark up text according to its intended presentation.
+
+    Tokens handled:
+    - {b}...{/b}: Bold text (rendered with ANSI codes)
+    - {it}...{/it}: Italic text (rendered with ANSI codes)
+    - {sc}...{/sc}: Small caps (rendered as uppercase)
+    - {sup}...{/sup}: Superscript (rendered with Unicode superscript where possible)
+    - {bc}: Bold colon (rendered as ": ")
+    - {ldquo}: Left double quote
+    - {rdquo}: Right double quote
+    - {inf}: Inferior/subscript marker
+    - {p_br}: Page break (removed)
+    - {sx|...}: Cross-references and other complex tokens (content extracted)
+
+    Parameters
+    ----------
+    text : str
+        Text containing MW formatting tokens.
+
+    Returns
+    -------
+    text : str
+        Text with formatting tokens processed for terminal display.
+    """
+    if not text:
+        return text
+
+    # Handle paired formatting tags
+    # Bold: use ANSI escape codes for terminal display
+    text = re.sub(r'\{b\}(.*?)\{/b\}', r'\033[1m\1\033[0m', text)
+
+    # Italic: use ANSI escape codes for terminal display
+    text = re.sub(r'\{it\}(.*?)\{/it\}', r'\033[3m\1\033[0m', text)
+
+    # Small caps: convert to uppercase
+    text = re.sub(r'\{sc\}(.*?)\{/sc\}', lambda m: m.group(1).upper(), text)
+
+    # Superscript: use Unicode superscript characters where possible
+    superscript_map = str.maketrans('0123456789', '⁰¹²³⁴⁵⁶⁷⁸⁹')
+    text = re.sub(r'\{sup\}(.*?)\{/sup\}', lambda m: m.group(1).translate(superscript_map), text)
+
+    # Single tokens
+    # Bold colon
+    text = text.replace('{bc}', ': ')
+
+    # Quotation marks
+    text = text.replace('{ldquo}', '"')
+    text = text.replace('{rdquo}', '"')
+
+    # Inferior/subscript (simply remove marker, keep content)
+    text = re.sub(r'\{inf\}(.*?)\{/inf\}', r'\1', text)
+
+    # Page breaks (remove entirely)
+    text = text.replace('{p_br}', '')
+
+    # Handle cross-references and other complex tokens with pipe-delimited content
+    # Extract just the display text (first part before |)
+    text = re.sub(r'\{([a-z_]+)\|([^}|]+)(?:\|[^}]*)?\}', r'\2', text)
+
+    # Remove any remaining unhandled tokens
+    text = re.sub(r'\{[^}]+\}', '', text)
+
+    return text.strip()
+
+
 def extract_definitions_from_sseq(sseq):
     """
     Extract all definitions from the sense sequence structure.
@@ -51,9 +121,11 @@ def extract_definitions_from_sseq(sseq):
 
                             # 'text' type contains the actual definition
                             if dt_type == 'text':
-                                # Clean up markup like {bc}, {sx|...}, etc.
-                                clean_text = re.sub(r'\{[^}]+\}', '', dt_content)
-                                clean_text = clean_text.strip()
+                                # Process formatting tokens properly
+                                clean_text = process_formatting_tokens(dt_content)
+                                # If the first character is a colon, remove it
+                                if clean_text.startswith(':'):
+                                    clean_text = clean_text[1:].strip()
                                 if clean_text and clean_text not in definitions:
                                     definitions.append(clean_text)
 
@@ -76,9 +148,8 @@ def extract_etymology(entry):
 
             # 'text' type contains the etymology text
             if et_type == 'text':
-                # Clean up markup
-                clean_text = re.sub(r'\{[^}]+\}', '', et_content)
-                clean_text = clean_text.strip()
+                # Process formatting tokens properly
+                clean_text = process_formatting_tokens(et_content)
                 if clean_text:
                     etymology_parts.append(clean_text)
 
@@ -129,7 +200,9 @@ def lookup_mw_collegiate_dict(
         return
 
     # Display all matching entries
-    print("=" * 60)
+    divider_lv0 = "=" * 60
+    print(f"\n{divider_lv0}\n")
+
     for idx, entry in enumerate(matching_entries, 1):
         # Extract word info
         word_id = entry.get('meta', {}).get('id', word)
@@ -137,10 +210,18 @@ def lookup_mw_collegiate_dict(
 
         # Print header
         if len(matching_entries) > 1:
-            print(f"\nEntry {idx}: {word_id}")
+            len_divider = len(f"| Entry {idx}: {word_id} |")
+            divider = "+" + "-" * (len_divider - 2) + "+"
+            print(divider)
+            print(f"| Entry {idx}: {word_id} |")
+            print(divider)
         else:
-            print(f"\nWord: {word_id}")
-        print("-" * 60)
+            len_divider = len(f"| Word: {word_id} |")
+            divider = "+" + "-" * (len_divider - 2) + "+"
+            print(divider)
+            print(f"| Word: {word_id} |")
+            print(divider)
+        print()
         print(f"Part of Speech: {functional_label}")
         print()
 
@@ -172,7 +253,7 @@ def lookup_mw_collegiate_dict(
                 print(f"  {etymology}")
                 print()
 
-    print("=" * 60)
+    print(divider_lv0)
 
 
 # Main execution
