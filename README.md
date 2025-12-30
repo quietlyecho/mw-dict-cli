@@ -33,17 +33,17 @@ export MW_API_KEY="your_api_key_here"
 
 ============================================================
 
-Word: apple
-------------------------------------------------------------
++-------------+
+| Word: apple |
++-------------+
+
 Part of Speech: noun
 
 Meanings (2):
-  1. the fleshy, usually rounded red, yellow, or green edible  fruit of a usually cultivated tree (genus Malus) of the rose family
+  1. the fleshy, usually rounded red, yellow, or green edible pome fruit of a usually cultivated tree (genus Malus) of the rose family
   2. a fruit (such as a star apple) or other vegetative growth (such as an oak apple) suggestive of an apple
 
 Etymology:
   Middle English appel, from Old English æppel; akin to Old High German apful apple, Old Irish ubull, Old Church Slavic ablŭko
 
 ============================================================
-
-```
