@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 
 import argparse
+import json
 import os
 import pprint
 import re
 import sys
-
-import requests
+import urllib.request
+import urllib.error
 
 # Find the value of `API_KEY` from environment variable
 MW_API_KEY = os.getenv("MW_API_KEY")
@@ -176,10 +177,11 @@ def lookup_mw_collegiate_dict(
         f"{word}?key={api_key}"
     )
 
-    response = requests.get(url)
-    if response.status_code != 200:
-        raise Exception(f"Error fetching data from MW API: {response.status_code}")
-    data = response.json()
+    try:
+        with urllib.request.urlopen(url) as response:
+            data = json.loads(response.read().decode('utf-8'))
+    except urllib.error.HTTPError as e:
+        raise Exception(f"Error fetching data from MW API: {e.code}")
 
     # Check if we got suggestions instead of definitions
     if data and isinstance(data[0], str):
