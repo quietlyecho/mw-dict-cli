@@ -1,35 +1,46 @@
 # Merriam-Webster Dictionary CLI
 
-A Python tool for looking up word definitions using the Merriam-Webster 
+A Python tool for looking up word definitions using the Merriam-Webster
 Collegiate Dictionary API.
 
-## What it Does 
+## Features
 
 - Show all meanings for the word looked up
 - Display part of speech (noun, verb, etc.)
 - Optional etymology information
+- No external dependencies (uses Python standard library only)
+
+## Installation
+
+Run the install script:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/quietlyecho/mw-dict-cli/main/install.sh | bash
+```
+
+This installs the `mw` command to `~/.local/bin`. Make sure this directory is in your PATH.
+
+## Setup
+
+Obtain an API key from Merriam Webster's
+[developer site](https://www.dictionaryapi.com/)
+(free for non-commercial use), then set it as an environment variable:
+
+```bash
+export MW_API_KEY="your_api_key_here"
+```
 
 ## Usage
 
 ```bash
-./lookup_mw_dict.py <word>
-./lookup_mw_dict.py <word> -e        # Include etymology
-```
-
-## Setup
-
-First obtain an API key from Merriam Webster's 
-[developer site](https://www.dictionaryapi.com/), 
-it's free for non-commercial use. Then
-set your API key as an environment variable:
-```bash
-export MW_API_KEY="your_api_key_here"
+mw <word>
+mw <word> -e        # Include etymology
 ```
 
 ## Example
 
 ```bash
-> ./lookup_mw_dict.py apple -e
+> mw apple -e
 
 ============================================================
 
@@ -47,3 +58,4 @@ Etymology:
   Middle English appel, from Old English æppel; akin to Old High German apful apple, Old Irish ubull, Old Church Slavic ablŭko
 
 ============================================================
+```
