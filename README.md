@@ -8,6 +8,7 @@ Collegiate Dictionary API.
 - Show all meanings for the word looked up
 - Display part of speech (noun, verb, etc.)
 - Optional etymology information
+- Filter entries by part of speech
 - No external dependencies (uses Python standard library only)
 
 ## Installation
@@ -35,7 +36,14 @@ export MW_API_KEY="your_api_key_here"
 ```bash
 mw <word>
 mw <word> -e        # Include etymology
+mw -p verb <word>   # Only show entries where the word is a verb
+mw -p noun adjective <word>
+mw --part-of-speech noun verb <word>
 ```
+
+Part-of-speech names are matched case-insensitively against Merriam-Webster's
+labels (e.g. `noun`, `verb`, `adjective`, `adverb`, `phrase`). If nothing
+matches, the available parts of speech for the word are listed.
 
 ## Example
 
