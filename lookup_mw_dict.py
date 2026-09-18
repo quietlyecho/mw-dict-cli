@@ -18,6 +18,8 @@ arg_parser = argparse.ArgumentParser()
 arg_parser.add_argument(
     "word",
     type=str,
+    # Optional here only so `-p noun verb WORD` parses; enforced below.
+    nargs="?",
     help="Look up a word in the Merriam-Webster Collegiate Dictionary"
 )
 
@@ -27,7 +29,25 @@ arg_parser.add_argument(
     help="Include etymology information (if available)"
 )
 
+arg_parser.add_argument(
+    "-p", "--part-of-speech",
+    nargs="+",
+    metavar="POS",
+    help=(
+        "Only show entries for the given part(s) of speech, "
+        "e.g. noun, verb, adjective, adverb (case-insensitive)"
+    )
+)
+
 args = arg_parser.parse_args()
+
+# `-p` is greedy (nargs="+"), so in `mw -p noun verb WORD` it also swallows
+# WORD. Recover the word as the last value in that case.
+if args.word is None:
+    if args.part_of_speech and len(args.part_of_speech) > 1:
+        args.word = args.part_of_speech.pop()
+    else:
+        arg_parser.error("the following arguments are required: word")
 
 
 def process_formatting_tokens(text):
@@ -157,11 +177,44 @@ def extract_etymology(entry):
     return ' '.join(etymology_parts) if etymology_parts else None
 
 
+def matches_part_of_speech(
+    functional_label: str | None,
+    parts_of_speech: list[str],
+) -> bool:
+    """
+    Check whether an entry's functional label is one of the requested ones.
+
+    Parameters
+    ----------
+    functional_label : str or None
+        The entry's `fl` field, e.g. "noun" or "verb".
+    parts_of_speech : list of str
+        Requested parts of speech.
+
+    Returns
+    -------
+    bool
+        True if the label matches any requested part of speech,
+        ignoring case and surrounding whitespace.
+
+    Notes
+    -----
+    A label carrying a qualifier after a comma (e.g. "noun, plural in form")
+    matches on the part before the comma.
+    """
+    if not functional_label:
+        return False
+
+    label = functional_label.split(',')[0].strip().lower()
+    return label in {pos.strip().lower() for pos in parts_of_speech}
+
+
 # Define function to look up word
 def lookup_mw_collegiate_dict(
     word,
     api_key: str = MW_API_KEY,
     show_etymology: bool = False,
+    parts_of_speech: list[str] | None = None,
 ):
     """
     Look up a word in the Merriam-Webster Dictionary API and return its definition.
@@ -170,6 +223,8 @@ def lookup_mw_collegiate_dict(
         word: The word to look up
         api_key: API key for Merriam-Webster API
         show_etymology: If True, include etymology information in the output
+        parts_of_speech: If given, only show entries whose part of speech
+            is one of these (e.g. ["noun", "verb"])
     """
 
     url = (
@@ -200,6 +255,26 @@ def lookup_mw_collegiate_dict(
     if not matching_entries:
         print(f"No definition found for '{word}'.")
         return
+
+    if parts_of_speech:
+        available = []
+        for entry in matching_entries:
+            label = entry.get('fl')
+            if label and label not in available:
+                available.append(label)
+
+        matching_entries = [
+            entry for entry in matching_entries
+            if matches_part_of_speech(entry.get('fl'), parts_of_speech)
+        ]
+
+        if not matching_entries:
+            print(
+                f"No {' / '.join(parts_of_speech)} definition found for "
+                f"'{word}'. Available parts of speech: "
+                f"{', '.join(available) or 'none'}."
+            )
+            return
 
     # Display all matching entries
     divider_lv0 = "=" * 60
@@ -260,4 +335,8 @@ def lookup_mw_collegiate_dict(
 
 # Main execution
 if __name__ == "__main__":
-    lookup_mw_collegiate_dict(word=args.word, show_etymology=args.etymology)
+    lookup_mw_collegiate_dict(
+        word=args.word,
+        show_etymology=args.etymology,
+        parts_of_speech=args.part_of_speech,
+    )
