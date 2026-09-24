@@ -9,6 +9,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+__version__ = "0.2.0"
+
 PROG = "mw"
 MW_API_URL = (
     "https://www.dictionaryapi.com/api/v3/references/collegiate/json/"
@@ -69,6 +71,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
         The parser for the `mw` command.
     """
     arg_parser = argparse.ArgumentParser(prog=PROG)
+
+    arg_parser.add_argument(
+        "--version",
+        action="version",
+        version=f"%(prog)s {__version__}",
+    )
 
     arg_parser.add_argument(
         "words",
