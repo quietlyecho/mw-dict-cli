@@ -68,7 +68,23 @@ def build_arg_parser() -> argparse.ArgumentParser:
     return arg_parser
 
 
-def process_formatting_tokens(text):
+def use_style() -> bool:
+    """
+    Decide whether to emit ANSI styling on stdout.
+
+    Returns
+    -------
+    bool
+        True if stdout is a terminal and `NO_COLOR` is unset or empty.
+
+    Notes
+    -----
+    Follows the convention at https://no-color.org.
+    """
+    return sys.stdout.isatty() and not os.environ.get("NO_COLOR")
+
+
+def process_formatting_tokens(text: str, style: bool = False) -> str:
     """
     Process Merriam-Webster formatting and punctuation tokens.
 
@@ -76,21 +92,24 @@ def process_formatting_tokens(text):
     mark up text according to its intended presentation.
 
     Tokens handled:
-    - {b}...{/b}: Bold text (rendered with ANSI codes)
-    - {it}...{/it}: Italic text (rendered with ANSI codes)
+    - {b}...{/b}: Bold text (ANSI bold if `style`, else plain)
+    - {it}...{/it}: Italic text (ANSI italic if `style`, else plain)
     - {sc}...{/sc}: Small caps (rendered as uppercase)
-    - {sup}...{/sup}: Superscript (rendered with Unicode superscript where possible)
+    - {sup}...{/sup}: Superscript (Unicode superscripts where possible)
     - {bc}: Bold colon (rendered as ": ")
     - {ldquo}: Left double quote
     - {rdquo}: Right double quote
     - {inf}: Inferior/subscript marker
     - {p_br}: Page break (removed)
-    - {sx|...}: Cross-references and other complex tokens (content extracted)
+    - {sx|...}: Cross-references and other complex tokens (content
+      extracted)
 
     Parameters
     ----------
     text : str
         Text containing MW formatting tokens.
+    style : bool, default False
+        If True, render bold and italic with ANSI escape codes.
 
     Returns
     -------
@@ -100,19 +119,22 @@ def process_formatting_tokens(text):
     if not text:
         return text
 
-    # Handle paired formatting tags
-    # Bold: use ANSI escape codes for terminal display
-    text = re.sub(r'\{b\}(.*?)\{/b\}', r'\033[1m\1\033[0m', text)
-
-    # Italic: use ANSI escape codes for terminal display
-    text = re.sub(r'\{it\}(.*?)\{/it\}', r'\033[3m\1\033[0m', text)
+    # Handle paired formatting tags. Without styling, the catch-all at
+    # the end strips the bare {b}/{it} markers.
+    if style:
+        text = re.sub(r'\{b\}(.*?)\{/b\}', r'\033[1m\1\033[0m', text)
+        text = re.sub(r'\{it\}(.*?)\{/it\}', r'\033[3m\1\033[0m', text)
 
     # Small caps: convert to uppercase
     text = re.sub(r'\{sc\}(.*?)\{/sc\}', lambda m: m.group(1).upper(), text)
 
     # Superscript: use Unicode superscript characters where possible
     superscript_map = str.maketrans('0123456789', '⁰¹²³⁴⁵⁶⁷⁸⁹')
-    text = re.sub(r'\{sup\}(.*?)\{/sup\}', lambda m: m.group(1).translate(superscript_map), text)
+    text = re.sub(
+        r'\{sup\}(.*?)\{/sup\}',
+        lambda m: m.group(1).translate(superscript_map),
+        text,
+    )
 
     # Single tokens
     # Bold colon
@@ -128,8 +150,8 @@ def process_formatting_tokens(text):
     # Page breaks (remove entirely)
     text = text.replace('{p_br}', '')
 
-    # Handle cross-references and other complex tokens with pipe-delimited content
-    # Extract just the display text (first part before |)
+    # Cross-references and other pipe-delimited tokens: keep just the
+    # display text (the first part before |)
     text = re.sub(r'\{([a-z_]+)\|([^}|]+)(?:\|[^}]*)?\}', r'\2', text)
 
     # Remove any remaining unhandled tokens
@@ -138,10 +160,24 @@ def process_formatting_tokens(text):
     return text.strip()
 
 
-def extract_definitions_from_sseq(sseq):
+def extract_definitions_from_sseq(
+    sseq: list,
+    style: bool = False,
+) -> list[str]:
     """
     Extract all definitions from the sense sequence structure.
-    The sseq structure is nested: [[sense_type, sense_data], ...]
+
+    Parameters
+    ----------
+    sseq : list
+        MW sense sequence, nested as [[sense_type, sense_data], ...].
+    style : bool, default False
+        Passed through to `process_formatting_tokens`.
+
+    Returns
+    -------
+    list of str
+        Unique definitions in order of appearance.
     """
     definitions = []
 
@@ -160,7 +196,9 @@ def extract_definitions_from_sseq(sseq):
                             # 'text' type contains the actual definition
                             if dt_type == 'text':
                                 # Process formatting tokens properly
-                                clean_text = process_formatting_tokens(dt_content)
+                                clean_text = process_formatting_tokens(
+                                    dt_content, style
+                                )
                                 # If the first character is a colon, remove it
                                 if clean_text.startswith(':'):
                                     clean_text = clean_text[1:].strip()
@@ -170,10 +208,21 @@ def extract_definitions_from_sseq(sseq):
     return definitions
 
 
-def extract_etymology(entry):
+def extract_etymology(entry: dict, style: bool = False) -> str | None:
     """
     Extract etymology information from an entry.
-    Etymology is stored in the 'et' field and may contain nested structure.
+
+    Parameters
+    ----------
+    entry : dict
+        An MW entry; etymology lives in its 'et' field.
+    style : bool, default False
+        Passed through to `process_formatting_tokens`.
+
+    Returns
+    -------
+    str or None
+        The etymology text, or None if the entry has none.
     """
     if 'et' not in entry:
         return None
@@ -187,7 +236,7 @@ def extract_etymology(entry):
             # 'text' type contains the etymology text
             if et_type == 'text':
                 # Process formatting tokens properly
-                clean_text = process_formatting_tokens(et_content)
+                clean_text = process_formatting_tokens(et_content, style)
                 if clean_text:
                     etymology_parts.append(clean_text)
 
@@ -277,6 +326,7 @@ def lookup_mw_collegiate_dict(
     api_key: str,
     show_etymology: bool = False,
     parts_of_speech: list[str] | None = None,
+    style: bool = False,
 ) -> bool:
     """
     Look up a word in the Merriam-Webster API and print its definitions.
@@ -292,6 +342,8 @@ def lookup_mw_collegiate_dict(
     parts_of_speech : list of str, optional
         If given, only show entries whose part of speech is one of these
         (e.g. ["noun", "verb"]).
+    style : bool, default False
+        If True, render bold and italic with ANSI escape codes.
 
     Returns
     -------
@@ -379,7 +431,9 @@ def lookup_mw_collegiate_dict(
             for def_section in entry['def']:
                 if 'sseq' in def_section:
                     definitions.extend(
-                        extract_definitions_from_sseq(def_section['sseq'])
+                        extract_definitions_from_sseq(
+                            def_section['sseq'], style
+                        )
                     )
 
         # If no full definitions found, fall back to shortdef
@@ -397,7 +451,7 @@ def lookup_mw_collegiate_dict(
 
         # Display etymology if requested
         if show_etymology:
-            etymology = extract_etymology(entry)
+            etymology = extract_etymology(entry, style)
             if etymology:
                 print("Etymology:")
                 print(f"  {etymology}")
@@ -445,6 +499,7 @@ def main(argv: list[str] | None = None) -> int:
             api_key=api_key,
             show_etymology=args.etymology,
             parts_of_speech=args.part_of_speech,
+            style=use_style(),
         )
     except MWAPIError as e:
         warn(str(e))
