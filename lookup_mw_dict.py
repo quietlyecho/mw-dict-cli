@@ -31,6 +31,34 @@ def warn(message: str) -> None:
     print(f"{PROG}: {message}", file=sys.stderr)
 
 
+def parse_parts_of_speech(value: str) -> list[str]:
+    """
+    Split a `-p` option-argument on commas.
+
+    Parameters
+    ----------
+    value : str
+        A comma-separated list, e.g. "noun,verb".
+
+    Returns
+    -------
+    list of str
+        The non-empty, whitespace-stripped items.
+
+    Raises
+    ------
+    argparse.ArgumentTypeError
+        If the list has no non-empty items.
+    """
+    parts = [pos.strip() for pos in value.split(',') if pos.strip()]
+    if not parts:
+        raise argparse.ArgumentTypeError(
+            "expected a comma-separated list such as noun,verb, "
+            f"got {value!r}"
+        )
+    return parts
+
+
 def build_arg_parser() -> argparse.ArgumentParser:
     """
     Build the command-line argument parser.
@@ -45,7 +73,6 @@ def build_arg_parser() -> argparse.ArgumentParser:
     arg_parser.add_argument(
         "word",
         type=str,
-        nargs="?",
         help="Look up a word in the Merriam-Webster Collegiate Dictionary"
     )
 
@@ -57,11 +84,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
     arg_parser.add_argument(
         "-p", "--part-of-speech",
-        nargs="+",
-        metavar="POS",
+        action="append",
+        type=parse_parts_of_speech,
+        metavar="POS[,POS...]",
         help=(
-            "Only show entries for the given part(s) of speech, "
-            "e.g. noun, verb, adjective, adverb (case-insensitive)"
+            "Only show entries for the given comma-separated part(s) of "
+            "speech, e.g. noun,verb (case-insensitive; repeatable)"
         )
     )
 
@@ -480,13 +508,10 @@ def main(argv: list[str] | None = None) -> int:
     arg_parser = build_arg_parser()
     args = arg_parser.parse_args(argv)
 
-    # `-p` is greedy (nargs="+"), so in `mw -p noun verb WORD` it also
-    # swallows WORD. Recover the word as the last value in that case.
-    if args.word is None:
-        if args.part_of_speech and len(args.part_of_speech) > 1:
-            args.word = args.part_of_speech.pop()
-        else:
-            arg_parser.error("the following arguments are required: word")
+    # Each `-p` yields a list; flatten `-p noun -p verb,adverb`.
+    parts_of_speech = [
+        pos for group in args.part_of_speech or [] for pos in group
+    ] or None
 
     api_key = os.getenv("MW_API_KEY")
     if not api_key:
@@ -498,7 +523,7 @@ def main(argv: list[str] | None = None) -> int:
             word=args.word,
             api_key=api_key,
             show_etymology=args.etymology,
-            parts_of_speech=args.part_of_speech,
+            parts_of_speech=parts_of_speech,
             style=use_style(),
         )
     except MWAPIError as e:

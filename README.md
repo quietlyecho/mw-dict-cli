@@ -37,8 +37,9 @@ export MW_API_KEY="your_api_key_here"
 mw <word>
 mw <word> -e        # Include etymology
 mw -p verb <word>   # Only show entries where the word is a verb
-mw -p noun adjective <word>
-mw --part-of-speech noun verb <word>
+mw -p noun,adjective <word>
+mw --part-of-speech=noun,verb <word>
+mw -p noun -p verb <word>
 ```
 
 Part-of-speech names are matched case-insensitively against Merriam-Webster's
