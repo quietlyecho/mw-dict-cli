@@ -40,7 +40,14 @@ mw -p verb <word>   # Only show entries where the word is a verb
 mw -p noun,adjective <word>
 mw --part-of-speech=noun,verb <word>
 mw -p noun -p verb <word>
+mw <word> <word>...  # Look up several words
+printf 'apple\npear\n' | mw   # Read words from stdin (also: `mw -`)
 ```
+
+`mw` exits 0 if any word was found, 1 if none was, and 2 on an error,
+like `grep`. Diagnostics go to stderr, so `mw word >/dev/null` works as
+a check. Bold and italics are shown only on a terminal, and never when
+`NO_COLOR` is set.
 
 Part-of-speech names are matched case-insensitively against Merriam-Webster's
 labels (e.g. `noun`, `verb`, `adjective`, `adverb`, `phrase`). If nothing

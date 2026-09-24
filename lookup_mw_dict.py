@@ -71,9 +71,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
     arg_parser = argparse.ArgumentParser(prog=PROG)
 
     arg_parser.add_argument(
-        "word",
+        "words",
         type=str,
-        help="Look up a word in the Merriam-Webster Collegiate Dictionary"
+        nargs="*",
+        metavar="word",
+        help=(
+            "Word(s) to look up in the Merriam-Webster Collegiate "
+            "Dictionary; with none, or with -, read words from stdin"
+        )
     )
 
     arg_parser.add_argument(
@@ -489,6 +494,32 @@ def lookup_mw_collegiate_dict(
     return True
 
 
+def expand_operands(operands: list[str]) -> list[str]:
+    """
+    Replace each `-` operand with the words read from stdin.
+
+    Parameters
+    ----------
+    operands : list of str
+        Words from the command line, possibly including `-`.
+
+    Returns
+    -------
+    list of str
+        The words to look up, in order. Stdin is read at most once, so
+        a second `-` contributes nothing, as with cat(1).
+    """
+    words = []
+    stdin_read = False
+    for operand in operands:
+        if operand != "-":
+            words.append(operand)
+        elif not stdin_read:
+            words.extend(sys.stdin.read().split())
+            stdin_read = True
+    return words
+
+
 def main(argv: list[str] | None = None) -> int:
     """
     Run the `mw` command.
@@ -502,8 +533,9 @@ def main(argv: list[str] | None = None) -> int:
     Returns
     -------
     int
-        Exit status, following grep(1): 0 if a definition was found,
-        1 if none was, 2 on a usage or runtime error.
+        Exit status, following grep(1): 0 if a definition was found for
+        any word, 1 if none was, 2 if any usage or runtime error
+        occurred.
     """
     arg_parser = build_arg_parser()
     args = arg_parser.parse_args(argv)
@@ -513,23 +545,34 @@ def main(argv: list[str] | None = None) -> int:
         pos for group in args.part_of_speech or [] for pos in group
     ] or None
 
+    # No operand means stdin, unless it is a terminal: reading that
+    # would look like a hang. An explicit `-` is honoured regardless.
+    if not args.words and sys.stdin.isatty():
+        arg_parser.error("no word given")
+    operands = args.words or ["-"]
+
     api_key = os.getenv("MW_API_KEY")
     if not api_key:
         warn("MW_API_KEY is not set; see the README for setup")
         return 2
 
-    try:
-        found = lookup_mw_collegiate_dict(
-            word=args.word,
-            api_key=api_key,
-            show_etymology=args.etymology,
-            parts_of_speech=parts_of_speech,
-            style=use_style(),
-        )
-    except MWAPIError as e:
-        warn(str(e))
-        return 2
+    style = use_style()
+    found = error = False
+    for word in expand_operands(operands):
+        try:
+            found |= lookup_mw_collegiate_dict(
+                word=word,
+                api_key=api_key,
+                show_etymology=args.etymology,
+                parts_of_speech=parts_of_speech,
+                style=style,
+            )
+        except MWAPIError as e:
+            warn(str(e))
+            error = True
 
+    if error:
+        return 2
     return 0 if found else 1
 
 
