@@ -3,51 +3,69 @@
 import argparse
 import json
 import os
-import pprint
 import re
 import sys
-import urllib.request
 import urllib.error
+import urllib.parse
+import urllib.request
 
-# Find the value of `API_KEY` from environment variable
-MW_API_KEY = os.getenv("MW_API_KEY")
-
-# Set up argument parser
-arg_parser = argparse.ArgumentParser()
-
-arg_parser.add_argument(
-    "word",
-    type=str,
-    # Optional here only so `-p noun verb WORD` parses; enforced below.
-    nargs="?",
-    help="Look up a word in the Merriam-Webster Collegiate Dictionary"
+PROG = "mw"
+MW_API_URL = (
+    "https://www.dictionaryapi.com/api/v3/references/collegiate/json/"
 )
 
-arg_parser.add_argument(
-    "-e", "--etymology",
-    action="store_true",
-    help="Include etymology information (if available)"
-)
 
-arg_parser.add_argument(
-    "-p", "--part-of-speech",
-    nargs="+",
-    metavar="POS",
-    help=(
-        "Only show entries for the given part(s) of speech, "
-        "e.g. noun, verb, adjective, adverb (case-insensitive)"
+class MWAPIError(Exception):
+    """Raised when the Merriam-Webster API cannot be queried."""
+
+
+def warn(message: str) -> None:
+    """
+    Print a diagnostic to stderr, prefixed with the program name.
+
+    Parameters
+    ----------
+    message : str
+        The diagnostic to print.
+    """
+    print(f"{PROG}: {message}", file=sys.stderr)
+
+
+def build_arg_parser() -> argparse.ArgumentParser:
+    """
+    Build the command-line argument parser.
+
+    Returns
+    -------
+    argparse.ArgumentParser
+        The parser for the `mw` command.
+    """
+    arg_parser = argparse.ArgumentParser(prog=PROG)
+
+    arg_parser.add_argument(
+        "word",
+        type=str,
+        nargs="?",
+        help="Look up a word in the Merriam-Webster Collegiate Dictionary"
     )
-)
 
-args = arg_parser.parse_args()
+    arg_parser.add_argument(
+        "-e", "--etymology",
+        action="store_true",
+        help="Include etymology information (if available)"
+    )
 
-# `-p` is greedy (nargs="+"), so in `mw -p noun verb WORD` it also swallows
-# WORD. Recover the word as the last value in that case.
-if args.word is None:
-    if args.part_of_speech and len(args.part_of_speech) > 1:
-        args.word = args.part_of_speech.pop()
-    else:
-        arg_parser.error("the following arguments are required: word")
+    arg_parser.add_argument(
+        "-p", "--part-of-speech",
+        nargs="+",
+        metavar="POS",
+        help=(
+            "Only show entries for the given part(s) of speech, "
+            "e.g. noun, verb, adjective, adverb (case-insensitive)"
+        )
+    )
+
+    return arg_parser
 
 
 def process_formatting_tokens(text):
@@ -130,7 +148,6 @@ def extract_definitions_from_sseq(sseq):
     for sense_group in sseq:
         for sense_item in sense_group:
             if isinstance(sense_item, list) and len(sense_item) >= 2:
-                sense_type = sense_item[0]
                 sense_data = sense_item[1]
 
                 # The actual definition is in the 'dt' (defining text) field
@@ -209,52 +226,106 @@ def matches_part_of_speech(
     return label in {pos.strip().lower() for pos in parts_of_speech}
 
 
-# Define function to look up word
-def lookup_mw_collegiate_dict(
-    word,
-    api_key: str = MW_API_KEY,
-    show_etymology: bool = False,
-    parts_of_speech: list[str] | None = None,
-):
+def fetch_mw_data(word: str, api_key: str) -> list:
     """
-    Look up a word in the Merriam-Webster Dictionary API and return its definition.
+    Query the Merriam-Webster Collegiate Dictionary API for a word.
 
-    Args:
-        word: The word to look up
-        api_key: API key for Merriam-Webster API
-        show_etymology: If True, include etymology information in the output
-        parts_of_speech: If given, only show entries whose part of speech
-            is one of these (e.g. ["noun", "verb"])
+    Parameters
+    ----------
+    word : str
+        The word or phrase to look up.
+    api_key : str
+        API key for the Merriam-Webster API.
+
+    Returns
+    -------
+    list
+        The decoded JSON response: entry dicts on a hit, suggestion
+        strings on a near miss, or an empty list.
+
+    Raises
+    ------
+    MWAPIError
+        If the API is unreachable, returns an HTTP error, or returns
+        something other than JSON (e.g. when the API key is invalid).
     """
-
     url = (
-        "https://www.dictionaryapi.com/api/v3/references/collegiate/json/"
-        f"{word}?key={api_key}"
+        MW_API_URL
+        + urllib.parse.quote(word, safe='')
+        + "?"
+        + urllib.parse.urlencode({"key": api_key})
     )
 
     try:
         with urllib.request.urlopen(url) as response:
-            data = json.loads(response.read().decode('utf-8'))
+            body = response.read().decode('utf-8')
     except urllib.error.HTTPError as e:
-        raise Exception(f"Error fetching data from MW API: {e.code}")
+        raise MWAPIError(f"MW API returned HTTP {e.code} {e.reason}") from e
+    except urllib.error.URLError as e:
+        raise MWAPIError(f"cannot reach MW API: {e.reason}") from e
+
+    try:
+        return json.loads(body)
+    except json.JSONDecodeError as e:
+        # MW answers a bad key with a plain-text message, not JSON.
+        reply = body.strip().splitlines()[0] if body.strip() else "(empty)"
+        raise MWAPIError(f"unexpected reply from MW API: {reply}") from e
+
+
+def lookup_mw_collegiate_dict(
+    word: str,
+    api_key: str,
+    show_etymology: bool = False,
+    parts_of_speech: list[str] | None = None,
+) -> bool:
+    """
+    Look up a word in the Merriam-Webster API and print its definitions.
+
+    Parameters
+    ----------
+    word : str
+        The word to look up.
+    api_key : str
+        API key for the Merriam-Webster API.
+    show_etymology : bool, default False
+        If True, include etymology information in the output.
+    parts_of_speech : list of str, optional
+        If given, only show entries whose part of speech is one of these
+        (e.g. ["noun", "verb"]).
+
+    Returns
+    -------
+    bool
+        True if at least one entry was printed, False if nothing matched.
+        Diagnostics for the no-match case go to stderr.
+
+    Raises
+    ------
+    MWAPIError
+        If the API cannot be queried; see `fetch_mw_data`.
+    """
+    data = fetch_mw_data(word, api_key)
 
     # Check if we got suggestions instead of definitions
     if data and isinstance(data[0], str):
-        print(f"No definition found for '{word}'. Did you mean: {', '.join(data[:5])}?")
-        return
+        warn(
+            f"no definition found for '{word}'; "
+            f"did you mean: {', '.join(data[:5])}?"
+        )
+        return False
 
     # Find all matching entries for the word
     matching_entries = []
     for entry in data:
         if isinstance(entry, dict):
             entry_id = entry.get('meta', {}).get('id', '')
-            # Check if this entry matches our word (may include homograph numbers like "battle:1")
+            # Entry ids may carry homograph numbers, e.g. "battle:1"
             if entry_id.split(':')[0].lower() == word.lower():
                 matching_entries.append(entry)
 
     if not matching_entries:
-        print(f"No definition found for '{word}'.")
-        return
+        warn(f"no definition found for '{word}'")
+        return False
 
     if parts_of_speech:
         available = []
@@ -269,12 +340,12 @@ def lookup_mw_collegiate_dict(
         ]
 
         if not matching_entries:
-            print(
-                f"No {' / '.join(parts_of_speech)} definition found for "
-                f"'{word}'. Available parts of speech: "
-                f"{', '.join(available) or 'none'}."
+            warn(
+                f"no {' / '.join(parts_of_speech)} definition found for "
+                f"'{word}'; available parts of speech: "
+                f"{', '.join(available) or 'none'}"
             )
-            return
+            return False
 
     # Display all matching entries
     divider_lv0 = "=" * 60
@@ -307,7 +378,9 @@ def lookup_mw_collegiate_dict(
         if 'def' in entry:
             for def_section in entry['def']:
                 if 'sseq' in def_section:
-                    definitions.extend(extract_definitions_from_sseq(def_section['sseq']))
+                    definitions.extend(
+                        extract_definitions_from_sseq(def_section['sseq'])
+                    )
 
         # If no full definitions found, fall back to shortdef
         if not definitions and 'shortdef' in entry:
@@ -326,17 +399,67 @@ def lookup_mw_collegiate_dict(
         if show_etymology:
             etymology = extract_etymology(entry)
             if etymology:
-                print(f"Etymology:")
+                print("Etymology:")
                 print(f"  {etymology}")
                 print()
 
     print(divider_lv0)
+    return True
 
 
-# Main execution
+def main(argv: list[str] | None = None) -> int:
+    """
+    Run the `mw` command.
+
+    Parameters
+    ----------
+    argv : list of str, optional
+        Command-line arguments, excluding the program name. Defaults to
+        `sys.argv[1:]`.
+
+    Returns
+    -------
+    int
+        Exit status, following grep(1): 0 if a definition was found,
+        1 if none was, 2 on a usage or runtime error.
+    """
+    arg_parser = build_arg_parser()
+    args = arg_parser.parse_args(argv)
+
+    # `-p` is greedy (nargs="+"), so in `mw -p noun verb WORD` it also
+    # swallows WORD. Recover the word as the last value in that case.
+    if args.word is None:
+        if args.part_of_speech and len(args.part_of_speech) > 1:
+            args.word = args.part_of_speech.pop()
+        else:
+            arg_parser.error("the following arguments are required: word")
+
+    api_key = os.getenv("MW_API_KEY")
+    if not api_key:
+        warn("MW_API_KEY is not set; see the README for setup")
+        return 2
+
+    try:
+        found = lookup_mw_collegiate_dict(
+            word=args.word,
+            api_key=api_key,
+            show_etymology=args.etymology,
+            parts_of_speech=args.part_of_speech,
+        )
+    except MWAPIError as e:
+        warn(str(e))
+        return 2
+
+    return 0 if found else 1
+
+
 if __name__ == "__main__":
-    lookup_mw_collegiate_dict(
-        word=args.word,
-        show_etymology=args.etymology,
-        parts_of_speech=args.part_of_speech,
-    )
+    try:
+        sys.exit(main())
+    except BrokenPipeError:
+        # Reader went away (e.g. `mw word | head -1`). Point stdout at
+        # devnull so the interpreter's final flush doesn't raise again;
+        # exit as if killed by SIGPIPE, like other Unix filters.
+        devnull = os.open(os.devnull, os.O_WRONLY)
+        os.dup2(devnull, sys.stdout.fileno())
+        sys.exit(128 + 13)
