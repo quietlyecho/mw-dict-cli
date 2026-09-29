@@ -530,7 +530,35 @@ def expand_operands(operands: list[str]) -> list[str]:
 
 def main(argv: list[str] | None = None) -> int:
     """
-    Run the `mw` command.
+    Run the `mw` command; this is the console-script entry point.
+
+    Parameters
+    ----------
+    argv : list of str, optional
+        Command-line arguments, excluding the program name. Defaults to
+        `sys.argv[1:]`.
+
+    Returns
+    -------
+    int
+        Exit status; see `run`. 141 if stdout was closed early, as if
+        killed by SIGPIPE.
+    """
+    try:
+        status = run(argv)
+        sys.stdout.flush()
+    except BrokenPipeError:
+        # Reader went away (e.g. `mw word | head -1`). Point stdout at
+        # devnull so the interpreter's final flush doesn't raise again.
+        devnull = os.open(os.devnull, os.O_WRONLY)
+        os.dup2(devnull, sys.stdout.fileno())
+        return 128 + 13
+    return status
+
+
+def run(argv: list[str] | None = None) -> int:
+    """
+    Parse arguments and look up each word.
 
     Parameters
     ----------
@@ -585,12 +613,4 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    try:
-        sys.exit(main())
-    except BrokenPipeError:
-        # Reader went away (e.g. `mw word | head -1`). Point stdout at
-        # devnull so the interpreter's final flush doesn't raise again;
-        # exit as if killed by SIGPIPE, like other Unix filters.
-        devnull = os.open(os.devnull, os.O_WRONLY)
-        os.dup2(devnull, sys.stdout.fileno())
-        sys.exit(128 + 13)
+    sys.exit(main())

@@ -13,13 +13,24 @@ Collegiate Dictionary API.
 
 ## Installation
 
-Run the install script:
+Install with [pipx](https://pipx.pypa.io) (`brew install pipx` on
+macOS), straight from GitHub:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/quietlyecho/mw-dict-cli/main/install.sh | bash
+pipx install git+https://github.com/quietlyecho/mw-dict-cli
+pipx ensurepath     # once, if ~/.local/bin is not yet on your PATH
 ```
 
-This installs the `mw` command to `~/.local/bin`. Make sure this directory is in your PATH.
+`pipx upgrade mw-dict-cli` updates it, `pipx uninstall mw-dict-cli`
+removes it, and `mw --version` reports the installed version.
+`uv tool install git+https://github.com/quietlyecho/mw-dict-cli` works
+too, if you use uv.
+
+For development, `pipx install -e .` from a clone installs `mw` so that
+edits take effect immediately.
+
+If you installed with the old `install.sh` script, delete that copy
+first: `rm ~/.local/bin/mw`.
 
 ## Setup
 
