@@ -1,0 +1,29 @@
+[project]
+name = "mw-dict-cli"
+dynamic = ["version"]
+description = "Look up words in the Merriam-Webster Collegiate Dictionary"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.scripts]
+mw = "lookup_mw_dict:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.version]
+path = "lookup_mw_dict.py"
+
+[tool.hatch.build.targets.wheel]
+only-include = ["lookup_mw_dict.py"]
+
+[tool.ruff]
+line-length = 80
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "B", "UP", "SIM", "RUF", "TRY"]
+ignore = ["TRY003"]

@@ -3,34 +3,129 @@
 import argparse
 import json
 import os
-import pprint
 import re
 import sys
-import urllib.request
 import urllib.error
+import urllib.parse
+import urllib.request
 
-# Find the value of `API_KEY` from environment variable
-MW_API_KEY = os.getenv("MW_API_KEY")
+__version__ = "0.2.0"
 
-# Set up argument parser
-arg_parser = argparse.ArgumentParser()
-
-arg_parser.add_argument(
-    "word",
-    type=str,
-    help="Look up a word in the Merriam-Webster Collegiate Dictionary"
+PROG = "mw"
+MW_API_URL = (
+    "https://www.dictionaryapi.com/api/v3/references/collegiate/json/"
 )
 
-arg_parser.add_argument(
-    "-e", "--etymology",
-    action="store_true",
-    help="Include etymology information (if available)"
-)
 
-args = arg_parser.parse_args()
+class MWAPIError(Exception):
+    """Raised when the Merriam-Webster API cannot be queried."""
 
 
-def process_formatting_tokens(text):
+def warn(message: str) -> None:
+    """
+    Print a diagnostic to stderr, prefixed with the program name.
+
+    Parameters
+    ----------
+    message : str
+        The diagnostic to print.
+    """
+    print(f"{PROG}: {message}", file=sys.stderr)
+
+
+def parse_parts_of_speech(value: str) -> list[str]:
+    """
+    Split a `-p` option-argument on commas.
+
+    Parameters
+    ----------
+    value : str
+        A comma-separated list, e.g. "noun,verb".
+
+    Returns
+    -------
+    list of str
+        The non-empty, whitespace-stripped items.
+
+    Raises
+    ------
+    argparse.ArgumentTypeError
+        If the list has no non-empty items.
+    """
+    parts = [pos.strip() for pos in value.split(',') if pos.strip()]
+    if not parts:
+        raise argparse.ArgumentTypeError(
+            "expected a comma-separated list such as noun,verb, "
+            f"got {value!r}"
+        )
+    return parts
+
+
+def build_arg_parser() -> argparse.ArgumentParser:
+    """
+    Build the command-line argument parser.
+
+    Returns
+    -------
+    argparse.ArgumentParser
+        The parser for the `mw` command.
+    """
+    arg_parser = argparse.ArgumentParser(prog=PROG)
+
+    arg_parser.add_argument(
+        "--version",
+        action="version",
+        version=f"%(prog)s {__version__}",
+    )
+
+    arg_parser.add_argument(
+        "words",
+        type=str,
+        nargs="*",
+        metavar="word",
+        help=(
+            "Word(s) to look up in the Merriam-Webster Collegiate "
+            "Dictionary; with none, or with -, read words from stdin"
+        )
+    )
+
+    arg_parser.add_argument(
+        "-e", "--etymology",
+        action="store_true",
+        help="Include etymology information (if available)"
+    )
+
+    arg_parser.add_argument(
+        "-p", "--part-of-speech",
+        action="append",
+        type=parse_parts_of_speech,
+        metavar="POS[,POS...]",
+        help=(
+            "Only show entries for the given comma-separated part(s) of "
+            "speech, e.g. noun,verb (case-insensitive; repeatable)"
+        )
+    )
+
+    return arg_parser
+
+
+def use_style() -> bool:
+    """
+    Decide whether to emit ANSI styling on stdout.
+
+    Returns
+    -------
+    bool
+        True if stdout is a terminal and `NO_COLOR` is unset or empty.
+
+    Notes
+    -----
+    Follows the convention at https://no-color.org.
+    """
+    return sys.stdout.isatty() and not os.environ.get("NO_COLOR")
+
+
+def process_formatting_tokens(text: str, style: bool = False) -> str:
     """
     Process Merriam-Webster formatting and punctuation tokens.
 
@@ -38,21 +133,24 @@ def process_formatting_tokens(text):
     mark up text according to its intended presentation.
 
     Tokens handled:
-    - {b}...{/b}: Bold text (rendered with ANSI codes)
-    - {it}...{/it}: Italic text (rendered with ANSI codes)
+    - {b}...{/b}: Bold text (ANSI bold if `style`, else plain)
+    - {it}...{/it}: Italic text (ANSI italic if `style`, else plain)
     - {sc}...{/sc}: Small caps (rendered as uppercase)
-    - {sup}...{/sup}: Superscript (rendered with Unicode superscript where possible)
+    - {sup}...{/sup}: Superscript (Unicode superscripts where possible)
     - {bc}: Bold colon (rendered as ": ")
     - {ldquo}: Left double quote
     - {rdquo}: Right double quote
     - {inf}: Inferior/subscript marker
     - {p_br}: Page break (removed)
-    - {sx|...}: Cross-references and other complex tokens (content extracted)
+    - {sx|...}: Cross-references and other complex tokens (content
+      extracted)
 
     Parameters
     ----------
     text : str
         Text containing MW formatting tokens.
+    style : bool, default False
+        If True, render bold and italic with ANSI escape codes.
 
     Returns
     -------
@@ -62,19 +160,22 @@ def process_formatting_tokens(text):
     if not text:
         return text
 
-    # Handle paired formatting tags
-    # Bold: use ANSI escape codes for terminal display
-    text = re.sub(r'\{b\}(.*?)\{/b\}', r'\033[1m\1\033[0m', text)
-
-    # Italic: use ANSI escape codes for terminal display
-    text = re.sub(r'\{it\}(.*?)\{/it\}', r'\033[3m\1\033[0m', text)
+    # Handle paired formatting tags. Without styling, the catch-all at
+    # the end strips the bare {b}/{it} markers.
+    if style:
+        text = re.sub(r'\{b\}(.*?)\{/b\}', r'\033[1m\1\033[0m', text)
+        text = re.sub(r'\{it\}(.*?)\{/it\}', r'\033[3m\1\033[0m', text)
 
     # Small caps: convert to uppercase
     text = re.sub(r'\{sc\}(.*?)\{/sc\}', lambda m: m.group(1).upper(), text)
 
     # Superscript: use Unicode superscript characters where possible
     superscript_map = str.maketrans('0123456789', '⁰¹²³⁴⁵⁶⁷⁸⁹')
-    text = re.sub(r'\{sup\}(.*?)\{/sup\}', lambda m: m.group(1).translate(superscript_map), text)
+    text = re.sub(
+        r'\{sup\}(.*?)\{/sup\}',
+        lambda m: m.group(1).translate(superscript_map),
+        text,
+    )
 
     # Single tokens
     # Bold colon
@@ -90,8 +191,8 @@ def process_formatting_tokens(text):
     # Page breaks (remove entirely)
     text = text.replace('{p_br}', '')
 
-    # Handle cross-references and other complex tokens with pipe-delimited content
-    # Extract just the display text (first part before |)
+    # Cross-references and other pipe-delimited tokens: keep just the
+    # display text (the first part before |)
     text = re.sub(r'\{([a-z_]+)\|([^}|]+)(?:\|[^}]*)?\}', r'\2', text)
 
     # Remove any remaining unhandled tokens
@@ -100,17 +201,30 @@ def process_formatting_tokens(text):
     return text.strip()
 
 
-def extract_definitions_from_sseq(sseq):
+def extract_definitions_from_sseq(
+    sseq: list,
+    style: bool = False,
+) -> list[str]:
     """
     Extract all definitions from the sense sequence structure.
-    The sseq structure is nested: [[sense_type, sense_data], ...]
+
+    Parameters
+    ----------
+    sseq : list
+        MW sense sequence, nested as [[sense_type, sense_data], ...].
+    style : bool, default False
+        Passed through to `process_formatting_tokens`.
+
+    Returns
+    -------
+    list of str
+        Unique definitions in order of appearance.
     """
     definitions = []
 
     for sense_group in sseq:
         for sense_item in sense_group:
             if isinstance(sense_item, list) and len(sense_item) >= 2:
-                sense_type = sense_item[0]
                 sense_data = sense_item[1]
 
                 # The actual definition is in the 'dt' (defining text) field
@@ -123,7 +237,9 @@ def extract_definitions_from_sseq(sseq):
                             # 'text' type contains the actual definition
                             if dt_type == 'text':
                                 # Process formatting tokens properly
-                                clean_text = process_formatting_tokens(dt_content)
+                                clean_text = process_formatting_tokens(
+                                    dt_content, style
+                                )
                                 # If the first character is a colon, remove it
                                 if clean_text.startswith(':'):
                                     clean_text = clean_text[1:].strip()
@@ -133,10 +249,21 @@ def extract_definitions_from_sseq(sseq):
     return definitions
 
 
-def extract_etymology(entry):
+def extract_etymology(entry: dict, style: bool = False) -> str | None:
     """
     Extract etymology information from an entry.
-    Etymology is stored in the 'et' field and may contain nested structure.
+
+    Parameters
+    ----------
+    entry : dict
+        An MW entry; etymology lives in its 'et' field.
+    style : bool, default False
+        Passed through to `process_formatting_tokens`.
+
+    Returns
+    -------
+    str or None
+        The etymology text, or None if the entry has none.
     """
     if 'et' not in entry:
         return None
@@ -150,56 +277,168 @@ def extract_etymology(entry):
             # 'text' type contains the etymology text
             if et_type == 'text':
                 # Process formatting tokens properly
-                clean_text = process_formatting_tokens(et_content)
+                clean_text = process_formatting_tokens(et_content, style)
                 if clean_text:
                     etymology_parts.append(clean_text)
 
     return ' '.join(etymology_parts) if etymology_parts else None
 
 
-# Define function to look up word
-def lookup_mw_collegiate_dict(
-    word,
-    api_key: str = MW_API_KEY,
-    show_etymology: bool = False,
-):
+def matches_part_of_speech(
+    functional_label: str | None,
+    parts_of_speech: list[str],
+) -> bool:
     """
-    Look up a word in the Merriam-Webster Dictionary API and return its definition.
+    Check whether an entry's functional label is one of the requested ones.
 
-    Args:
-        word: The word to look up
-        api_key: API key for Merriam-Webster API
-        show_etymology: If True, include etymology information in the output
+    Parameters
+    ----------
+    functional_label : str or None
+        The entry's `fl` field, e.g. "noun" or "verb".
+    parts_of_speech : list of str
+        Requested parts of speech.
+
+    Returns
+    -------
+    bool
+        True if the label matches any requested part of speech,
+        ignoring case and surrounding whitespace.
+
+    Notes
+    -----
+    A label carrying a qualifier after a comma (e.g. "noun, plural in form")
+    matches on the part before the comma.
     """
+    if not functional_label:
+        return False
 
+    label = functional_label.split(',')[0].strip().lower()
+    return label in {pos.strip().lower() for pos in parts_of_speech}
+
+
+def fetch_mw_data(word: str, api_key: str) -> list:
+    """
+    Query the Merriam-Webster Collegiate Dictionary API for a word.
+
+    Parameters
+    ----------
+    word : str
+        The word or phrase to look up.
+    api_key : str
+        API key for the Merriam-Webster API.
+
+    Returns
+    -------
+    list
+        The decoded JSON response: entry dicts on a hit, suggestion
+        strings on a near miss, or an empty list.
+
+    Raises
+    ------
+    MWAPIError
+        If the API is unreachable, returns an HTTP error, or returns
+        something other than JSON (e.g. when the API key is invalid).
+    """
     url = (
-        "https://www.dictionaryapi.com/api/v3/references/collegiate/json/"
-        f"{word}?key={api_key}"
+        MW_API_URL
+        + urllib.parse.quote(word, safe='')
+        + "?"
+        + urllib.parse.urlencode({"key": api_key})
     )
 
     try:
         with urllib.request.urlopen(url) as response:
-            data = json.loads(response.read().decode('utf-8'))
+            body = response.read().decode('utf-8')
     except urllib.error.HTTPError as e:
-        raise Exception(f"Error fetching data from MW API: {e.code}")
+        raise MWAPIError(f"MW API returned HTTP {e.code} {e.reason}") from e
+    except urllib.error.URLError as e:
+        raise MWAPIError(f"cannot reach MW API: {e.reason}") from e
+
+    try:
+        return json.loads(body)
+    except json.JSONDecodeError as e:
+        # MW answers a bad key with a plain-text message, not JSON.
+        reply = body.strip().splitlines()[0] if body.strip() else "(empty)"
+        raise MWAPIError(f"unexpected reply from MW API: {reply}") from e
+
+
+def lookup_mw_collegiate_dict(
+    word: str,
+    api_key: str,
+    show_etymology: bool = False,
+    parts_of_speech: list[str] | None = None,
+    style: bool = False,
+) -> bool:
+    """
+    Look up a word in the Merriam-Webster API and print its definitions.
+
+    Parameters
+    ----------
+    word : str
+        The word to look up.
+    api_key : str
+        API key for the Merriam-Webster API.
+    show_etymology : bool, default False
+        If True, include etymology information in the output.
+    parts_of_speech : list of str, optional
+        If given, only show entries whose part of speech is one of these
+        (e.g. ["noun", "verb"]).
+    style : bool, default False
+        If True, render bold and italic with ANSI escape codes.
+
+    Returns
+    -------
+    bool
+        True if at least one entry was printed, False if nothing matched.
+        Diagnostics for the no-match case go to stderr.
+
+    Raises
+    ------
+    MWAPIError
+        If the API cannot be queried; see `fetch_mw_data`.
+    """
+    data = fetch_mw_data(word, api_key)
 
     # Check if we got suggestions instead of definitions
     if data and isinstance(data[0], str):
-        print(f"No definition found for '{word}'. Did you mean: {', '.join(data[:5])}?")
-        return
+        warn(
+            f"no definition found for '{word}'; "
+            f"did you mean: {', '.join(data[:5])}?"
+        )
+        return False
 
     # Find all matching entries for the word
     matching_entries = []
     for entry in data:
         if isinstance(entry, dict):
             entry_id = entry.get('meta', {}).get('id', '')
-            # Check if this entry matches our word (may include homograph numbers like "battle:1")
+            # Entry ids may carry homograph numbers, e.g. "battle:1"
             if entry_id.split(':')[0].lower() == word.lower():
                 matching_entries.append(entry)
 
     if not matching_entries:
-        print(f"No definition found for '{word}'.")
-        return
+        warn(f"no definition found for '{word}'")
+        return False
+
+    if parts_of_speech:
+        available = []
+        for entry in matching_entries:
+            label = entry.get('fl')
+            if label and label not in available:
+                available.append(label)
+
+        matching_entries = [
+            entry for entry in matching_entries
+            if matches_part_of_speech(entry.get('fl'), parts_of_speech)
+        ]
+
+        if not matching_entries:
+            warn(
+                f"no {' / '.join(parts_of_speech)} definition found for "
+                f"'{word}'; available parts of speech: "
+                f"{', '.join(available) or 'none'}"
+            )
+            return False
 
     # Display all matching entries
     divider_lv0 = "=" * 60
@@ -232,7 +471,11 @@ def lookup_mw_collegiate_dict(
         if 'def' in entry:
             for def_section in entry['def']:
                 if 'sseq' in def_section:
-                    definitions.extend(extract_definitions_from_sseq(def_section['sseq']))
+                    definitions.extend(
+                        extract_definitions_from_sseq(
+                            def_section['sseq'], style
+                        )
+                    )
 
         # If no full definitions found, fall back to shortdef
         if not definitions and 'shortdef' in entry:
@@ -249,15 +492,125 @@ def lookup_mw_collegiate_dict(
 
         # Display etymology if requested
         if show_etymology:
-            etymology = extract_etymology(entry)
+            etymology = extract_etymology(entry, style)
             if etymology:
-                print(f"Etymology:")
+                print("Etymology:")
                 print(f"  {etymology}")
                 print()
 
     print(divider_lv0)
+    return True
 
 
-# Main execution
+def expand_operands(operands: list[str]) -> list[str]:
+    """
+    Replace each `-` operand with the words read from stdin.
+
+    Parameters
+    ----------
+    operands : list of str
+        Words from the command line, possibly including `-`.
+
+    Returns
+    -------
+    list of str
+        The words to look up, in order. Stdin is read at most once, so
+        a second `-` contributes nothing, as with cat(1).
+    """
+    words = []
+    stdin_read = False
+    for operand in operands:
+        if operand != "-":
+            words.append(operand)
+        elif not stdin_read:
+            words.extend(sys.stdin.read().split())
+            stdin_read = True
+    return words
+
+
+def main(argv: list[str] | None = None) -> int:
+    """
+    Run the `mw` command; this is the console-script entry point.
+
+    Parameters
+    ----------
+    argv : list of str, optional
+        Command-line arguments, excluding the program name. Defaults to
+        `sys.argv[1:]`.
+
+    Returns
+    -------
+    int
+        Exit status; see `run`. 141 if stdout was closed early, as if
+        killed by SIGPIPE.
+    """
+    try:
+        status = run(argv)
+        sys.stdout.flush()
+    except BrokenPipeError:
+        # Reader went away (e.g. `mw word | head -1`). Point stdout at
+        # devnull so the interpreter's final flush doesn't raise again.
+        devnull = os.open(os.devnull, os.O_WRONLY)
+        os.dup2(devnull, sys.stdout.fileno())
+        return 128 + 13
+    return status
+
+
+def run(argv: list[str] | None = None) -> int:
+    """
+    Parse arguments and look up each word.
+
+    Parameters
+    ----------
+    argv : list of str, optional
+        Command-line arguments, excluding the program name. Defaults to
+        `sys.argv[1:]`.
+
+    Returns
+    -------
+    int
+        Exit status, following grep(1): 0 if a definition was found for
+        any word, 1 if none was, 2 if any usage or runtime error
+        occurred.
+    """
+    arg_parser = build_arg_parser()
+    args = arg_parser.parse_args(argv)
+
+    # Each `-p` yields a list; flatten `-p noun -p verb,adverb`.
+    parts_of_speech = [
+        pos for group in args.part_of_speech or [] for pos in group
+    ] or None
+
+    # No operand means stdin, unless it is a terminal: reading that
+    # would look like a hang. An explicit `-` is honoured regardless.
+    if not args.words and sys.stdin.isatty():
+        arg_parser.error("no word given")
+    operands = args.words or ["-"]
+
+    api_key = os.getenv("MW_API_KEY")
+    if not api_key:
+        warn("MW_API_KEY is not set; see the README for setup")
+        return 2
+
+    style = use_style()
+    found = error = False
+    for word in expand_operands(operands):
+        try:
+            found |= lookup_mw_collegiate_dict(
+                word=word,
+                api_key=api_key,
+                show_etymology=args.etymology,
+                parts_of_speech=parts_of_speech,
+                style=style,
+            )
+        except MWAPIError as e:
+            warn(str(e))
+            error = True
+
+    if error:
+        return 2
+    return 0 if found else 1
+
+
 if __name__ == "__main__":
-    lookup_mw_collegiate_dict(word=args.word, show_etymology=args.etymology)
+    sys.exit(main())
